@@ -1,0 +1,154 @@
+---
+title: "BostonHousingAnalysis"
+author: "Duc-Anh Nguyen"
+date: "2025-02-06"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+Goal: Effects of others on median house prices (medv)
+```{r}
+library(MASS)
+boston <- Boston
+head(boston)
+dim(boston)
+skimr::skim(boston)
+summary(boston)
+library(factoextra)
+
+lapply(lapply(boston, table), length)
+# chas 2 Ausprägungen, rad 9, alle andere mehr als 10
+
+plot(boston$age, boston$medv)
+
+for (col in names(Boston)) {
+  if (col != "medv") {
+    plot(Boston[[col]], Boston$medv,
+         xlab = col, ylab = "medv",
+         main = paste("medv vs", col),
+         pch = 19)
+  }
+}
+# basic lm
+model <- lm(medv~., data = boston)
+stepAIC(model) |> summary()
+
+
+
+# PCA
+boston_matrix <- as.matrix(boston)
+boston_matrix |> head()
+colMeans(boston_matrix)
+cov(boston_matrix)
+cor(boston_matrix)
+boston_pca <- prcomp(boston_matrix, scale = TRUE)
+boston_pca |> summary()
+boston_pca_2 <- princomp(scale(boston_matrix))
+boston_pca_2 |> summary()
+
+# plot the scree plot
+cowplot::plot_grid(
+  fviz_eig(boston_pca, addlabels = TRUE) + ggtitle(""),
+  fviz_eig(boston_pca, choice = "eigenvalue", addlabels = TRUE) + ggtitle("")
+)
+
+fviz_pca_var(boston_pca, col.var = "black")
+fviz_pca_ind(boston_pca)
+
+```
+
+
+```{r}
+
+library(glmnet)
+n <- nrow(boston)
+p <- ncol(boston)-1
+
+# partitioning
+set.seed(123)
+train_ind <- sample(seq(n), size = ceiling(0.8*n))
+train_set <- boston[train_ind,]
+test_set <- boston[-train_ind, ]
+
+### training
+# basic lm
+model <- lm(medv~., data = train_set)
+
+# lm with lasso
+lasso_lm <- glmnet(x= as.matrix(train_set[, -(p+1)]), y = train_set$medv, alpha = 1)
+lasso_lambda <- cv.glmnet(x = as.matrix(train_set[, -(p+1)]), y = train_set$medv, alpha = 1)$lambda.min
+
+# lm with ridge
+ridge_lm <- glmnet(x= as.matrix(train_set[, -(p+1)]), y = train_set$medv, alpha = 0)
+ridge_lambda <- cv.glmnet(x = as.matrix(train_set[, -(p+1)]), y = train_set$medv, alpha = 0)$lambda.min
+
+#StepwiseSelectionperAIC
+model_AIC <- stepAIC(
+  object = model,
+  scope = list(upper =  ~ ., lower =  ~ 1),
+  direction = "both"
+)
+
+y_train <- train_set$medv
+predict_train <- matrix(data = 0,
+                        nrow = nrow(train_set),
+                        ncol = 4)
+
+predict_train[, 1] <- predict(object = model,
+                              newdata = train_set[, -(p + 1)])
+
+predict_train[, 2] <- predict.glmnet(object = lasso_lm,
+                                     newx = as.matrix(train_set[, -(p + 1)]),
+                                     s = lasso_lambda)
+
+predict_train[, 3] <- predict.glmnet(object = ridge_lm,
+                                     newx = as.matrix(train_set[, -(p + 1)]),
+                                     s = ridge_lambda)
+
+predict_train[, 4] <- predict(object = model_AIC,
+                              newdata = train_set[, -(p + 1)])
+
+
+MSE_train <- rep(x = 0, length.out = 4)
+for (i in 1:4)
+  MSE_train[i] = mean((y_train - predict_train[, i]) ^ 2)
+MSE_train
+
+par(mfrow = c(2, 1))
+# Ridge-Regularisierung:
+plotmo::plot_glmnet(x = ridge_lm, label = TRUE, xvar = "lambda")
+title(main = "Ridge", line = 3)
+# LASSO-Regularisierung:
+plotmo::plot_glmnet(x = lasso_lm, label = TRUE, xvar = "lambda")
+title(main = "LASSO", line = 3)
+```
+
+
+```{r}
+
+y_test <- test_set$medv
+predict_test <- matrix(data = 0,
+                       nrow = nrow(test_set),
+                       ncol = 4)
+predict_test[, 1] <- predict(object = model,
+                             newdata = test_set[, -(p + 1)])
+predict_test[, 2] <- predict.glmnet(object = ridge_lm,
+                                    newx = as.matrix(test_set[, -(p + 1)]),
+                                    s = ridge_lambda)
+predict_test[, 3] <- predict.glmnet(object = lasso_lm,
+                                    newx = as.matrix(test_set[, -(p + 1)]),
+                                    s = lasso_lambda)
+predict_test[, 4] <- predict(object = model_AIC,
+                              newdata = test_set[, -(p + 1)])
+MSE_test <- rep(x = 0, length.out = 4)
+for (i in 1:4)
+  MSE_test[i] = mean((y_test - predict_test[, i]) ^ 2)
+MSE_test
+
+
+```
+
